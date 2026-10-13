@@ -1,0 +1,8 @@
+__pycache__/
+*.pyc
+config.ini
+applist.txt
+error*.log
+build/
+dist/
+*.spec
