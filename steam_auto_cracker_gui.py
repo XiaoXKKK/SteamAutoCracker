@@ -2,7 +2,7 @@ import traceback
 
 try: # Handles Python errors to write them to a log file so they can be reported and fixed more easily.
     import tkinter as tk
-    from tkinter import ttk, filedialog, font
+    from tkinter import ttk, filedialog, font, messagebox
     from tkinterdnd2 import DND_FILES, TkinterDnD
 
     import requests
@@ -11,6 +11,8 @@ try: # Handles Python errors to write them to a log file so they can be reported
     import os
     import subprocess
     from sac_lib.get_file_version import GetFileVersion
+    from sac_lib.app_lookup import resolve_app_name
+    from sac_lib.save_migration import discover_steam_path, steam_accounts, account_steam_id, migrate_account, game_is_running
     import shutil
     from time import sleep
     from sys import exit
@@ -172,45 +174,22 @@ try: # Handles Python errors to write them to a log file so they can be reported
             selectFolderButton.config(state=tk.NORMAL) # Re-enable the ability to change the selected folder
 
     def FindInAppList(appName):
-        update_logs("\nImporting and searching the App List, this could take a few seconds if your computer isn't powerful enough.")
-        gameFoundStatus.config(text=f"Searching in the App List...")
-        root.update() # Update the window now
-        try:
-            with open("applist.txt", "r", encoding="utf-8") as file:
-                data = json.load(file)
-        except:
-            update_logs("The App List isn't downloaded on your computer, downloading it...")
-            UpdateAppList()
-            return FindInAppList(appName) # Re launch this funtion
-
-        for elem in data["applist"]["apps"]:
-            if elem["name"].lower() != appName.lower():
-                continue
-
-            return elem["appid"]
-
-        update_logs("[!] The App was not found, make sure you entered EXACTLY the Steam Game's name (watch it on Steam)")
-        update_logs("If you typed it properly, you can try to update the App List. Alternatively, you can try entering the AppID.")
-        gameFoundStatus.config(text=f"App not found!")
-
-        updateAppListButton.grid(row=0, column=2, padx=(10, 0))
-        return 0
-
-    def UpdateAppList():
-        updateAppListButton.grid_forget()
-        update_logs("\nUpdating the App List, this could take a few seconds to up to a minute, depending on your internet connection.")
-        gameFoundStatus.config(text=f"Updating the App List...")
+        update_logs("\nSearching the cached App List and Steam store...")
+        gameFoundStatus.config(text="Searching...")
         root.update()
         try:
-            req = SACRequest("https://api.steampowered.com/ISteamApps/GetAppList/v2/", "UpdateAppList").req
-        except Exception:
-            gameFoundStatus.config(text=f"An error has occurred")
-            return
-
-        with open("applist.txt", "w", encoding="utf-8") as file:
-            file.write(req.text)
-        update_logs("App List updated!")
-        gameFoundStatus.config(text=f"App List updated!")
+            result = resolve_app_name(appName)
+        except (requests.RequestException, ValueError) as error:
+            update_logs(f"\n[!] Name search failed: {error}. Retry or enter the AppID.")
+            gameFoundStatus.config(text="Name search failed")
+            updateAppListButton.grid(row=0, column=2, padx=(10, 0))
+            return 0
+        if result:
+            return result
+        update_logs("\n[!] No exact name match found. Enter the Steam store name or AppID.")
+        gameFoundStatus.config(text="App not found!")
+        updateAppListButton.grid(row=0, column=2, padx=(10, 0))
+        return 0
 
     def RetrieveAppName(appID: int) -> str:
         try:
@@ -353,8 +332,97 @@ try: # Handles Python errors to write them to a log file so they can be reported
         gameFoundStatus.config(text=f"All details retrieved for {gameName}!")
         return True # Retrieved game and DLCs successfully
 
+    def SelectSteamAccount():
+        top = tk.Toplevel(root)
+        top.title("Original Steam account")
+        top.resizable(False, False)
+        selection = config["SteamAccount"]
+        path_var = tk.StringVar(value=selection.get("SteamPath", "") or discover_steam_path())
+        account_var = tk.StringVar(value=selection.get("AccountID", ""))
+        accepted = [False]
+        ttk.Label(top, text="Select the original account once. This choice is saved in config.ini.").pack(padx=16, pady=10)
+        ttk.Label(top, text="Steam installation folder:").pack(anchor="w", padx=16)
+        ttk.Entry(top, textvariable=path_var, width=70).pack(padx=16, pady=4)
+        accounts = ttk.Combobox(top, textvariable=account_var, state="readonly", width=40)
+        ttk.Label(top, text="Account ID (the folder name under Steam/userdata):").pack(anchor="w", padx=16)
+        accounts.pack(padx=16, pady=4)
+        status = ttk.Label(top, text="", wraplength=520)
+        status.pack(padx=16, pady=4)
+
+        def refresh():
+            try:
+                values = steam_accounts(path_var.get())
+                accounts["values"] = values
+                if account_var.get() not in values:
+                    account_var.set(values[0] if len(values) == 1 else "")
+                status.config(text=f"Found {len(values)} account(s).")
+            except (OSError, ValueError) as error:
+                accounts["values"] = []
+                account_var.set("")
+                status.config(text=str(error))
+
+        def browse():
+            path = filedialog.askdirectory(parent=top, title="Select Steam installation folder")
+            if path:
+                path_var.set(path)
+                refresh()
+
+        def save(use_original=True):
+            try:
+                if use_original:
+                    account_steam_id(account_var.get())
+                    if account_var.get() not in steam_accounts(path_var.get()):
+                        raise ValueError("Select an account from this Steam installation.")
+                selection["SteamPath"] = path_var.get() if use_original else ""
+                selection["AccountID"] = account_var.get() if use_original else ""
+                selection["Configured"] = "1"
+                UpdateConfig()
+                accepted[0] = True
+                top.destroy()
+            except (OSError, ValueError) as error:
+                status.config(text=str(error))
+
+        ttk.Button(top, text="Browse Steam folder", command=browse).pack(pady=4)
+        ttk.Button(top, text="Refresh accounts", command=refresh).pack(pady=4)
+        ttk.Label(top, text="Close the game before applying. Existing Steam remote saves are imported once, with a backup. Game-managed local save folders are not moved.", wraplength=520).pack(padx=16, pady=8)
+        ttk.Button(top, text="Remember original account", command=save).pack(pady=4)
+        ttk.Button(top, text="Use emulator defaults (no import)", command=lambda: save(False)).pack(pady=(4, 12))
+        refresh()
+        top.transient(root)
+        top.grab_set()
+        root.wait_window(top)
+        return accepted[0]
+
+    def PrepareSteamAccount():
+        if config["Crack"]["SelectedCrack"] != "game_goldberg" or config["Preferences"]["CrackOption"] != "0":
+            return True
+        if config["SteamAccount"].get("Configured", "0") != "1" and not SelectSteamAccount():
+            return False
+        account = config["SteamAccount"]
+        if not account.get("AccountID"):
+            return True
+        try:
+            if game_is_running(folder_path):
+                raise ValueError("Close the game before importing saves.")
+            locations = [directory for directory, _, files in os.walk(folder_path)
+                         if "steam_api.dll" in files or "steam_api64.dll" in files]
+            result = migrate_account(account["SteamPath"], account["AccountID"], appID, locations, game_folder=folder_path)
+            if result["already_imported"]:
+                update_logs("\nOriginal account configured. Existing imported saves were preserved.")
+            else:
+                update_logs(f"\nImported {result['files']} Steam remote save files and configured the original account.")
+            update_logs(f"\nSave/identity backup: {result['backup']}")
+            return True
+        except (OSError, ValueError) as error:
+            update_logs(f"\n[!] Account/save preparation stopped: {error}")
+            messagebox.showerror("Account/save import stopped", str(error), parent=root)
+            return False
+
     def CrackGame():
         global appID
+
+        if not PrepareSteamAccount():
+            return
 
         # Prevents the user from searching a game or selecting a folder or re-clicking the crack game button
         selectFolderButton.config(state=tk.DISABLED)
@@ -533,11 +601,11 @@ try: # Handles Python errors to write them to a log file so they can be reported
                     update_logs("Created new file " + relativeRootDir + fileName)
 
 
-        update_logs("\n-----\nFinished cracking the game!")
+        update_logs("\n-----\nFinished processing the game files.")
         if not cracked:
             update_logs("[!] No Steam API DLL was found in the game!")
         else:
-            update_logs("The game has been cracked successfully! (If you attempt to crack if again, SAC will try its best to make it work, but will let some leftovers of old cracks.)")
+            update_logs("Finished applying the selected emulator files/configuration. Game startup and emulator compatibility have not been verified. If the game fails to start, check its logs and consider another emulator. Reapplying may leave files from a previous emulator.")
 
         EndCrack()
 
@@ -828,9 +896,11 @@ try: # Handles Python errors to write them to a log file so they can be reported
             currentConfig["Advanced"]["RetryDelay"] = str(RETRY_DELAY)
             currentConfig["Advanced"]["RetryMax"] = str(RETRY_MAX)
             currentConfig["Advanced"]["BypassGameVerification"] = "0"
+        if resetLevel == 0:
+            currentConfig["SteamAccount"] = {"SteamPath": "", "AccountID": "", "Configured": "0"}
         if resetLevel == 0 or resetLevel == 2:
             currentConfig["Crack"] = {}
-            currentConfig["Crack"]["SelectedCrack"] = "game_ali213"
+            currentConfig["Crack"]["SelectedCrack"] = "game_goldberg"
 
         if not customConfig:
             UpdateConfig()
@@ -1040,7 +1110,7 @@ try: # Handles Python errors to write them to a log file so they can be reported
     gameNameEntry.grid(row=0, column=0, ipady=5)
     searchGameButton = ttk.Button(frame4, text="Search", padding=5, command=search_game)
     searchGameButton.grid(row=0, column=1, padx=(10, 0))
-    updateAppListButton = ttk.Button(frame4, text="Update the App List", padding=0, command=UpdateAppList)
+    updateAppListButton = ttk.Button(frame4, text="Retry name search", padding=0, command=search_game)
 
     gameFoundStatus = ttk.Label(frameGame2, text="")
     gameFoundStatus.pack(pady=(5, 0), anchor="center")
@@ -1060,6 +1130,7 @@ try: # Handles Python errors to write them to a log file so they can be reported
     selectCrackButton = ttk.Button(selectedCrackFrame, text="None", padding=5, command=DisplayCrackList)
     selectCrackButton.grid(row=0, column=1, padx=(10, 0))
     UpdateSelectedCrackDisplay() # Updates the text of selectCrackButton
+    ttk.Button(frameCrack2, text="Original Steam account / save import", command=SelectSteamAccount).pack(pady=(8, 0))
     crackGameButton = ttk.Button(frameCrack2, text="Crack the game", padding=8, command=CrackGame)
     crackGameButton.pack(pady=(10, 0))
 
