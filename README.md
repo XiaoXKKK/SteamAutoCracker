@@ -12,7 +12,7 @@ An open-source script that automatically Cracks (removes DRM from) Steam games
 - Run `steam_auto_cracker_gui.exe`
 - Select the folder of your game
 - Enter the name of the game to try to crack it! (you can also enter the Steam AppID if you know it)
-  - SAC will automatically attempt to find the AppID using the Name you provided. If it can't, please try entering the AppID yourself.
+  - SAC searches the local app list, then the Steam store for an exact name match. If it can't find one, please enter the AppID yourself.
   - You can find the AppID in the URL of the game's Steam page (ex: store.steampowered.com/app/-> ***620980*** <-/Beat_Saber/)
 
 ## Features
@@ -22,7 +22,7 @@ An open-source script that automatically Cracks (removes DRM from) Steam games
 - No Steam account or Steam API key needed
 - Configurable to your liking
 - Option to only unlock DLCs for your bought Steam games instead of cracking them entirely
-- Option to choose your own Steam Emu thanks to a simple list, and simple config template system (default: ALI213)
+- Option to choose your own Steam Emu thanks to a simple list, and simple config template system (default: Goldberg)
   - List of Steam emus included by default:
     - ALI213 (Game)
     - Goldberg (Game)
@@ -51,6 +51,9 @@ Screenshots from v2.0.0
   - The `tkinter` module, but it should be included in Python by default.
   - As of v2.2.0 GUI, the `tkinterdnd2` module is required as well (v0.4.0+). Install it with `py -m pip install tkinterdnd2`. ([pypi link](https://pypi.org/project/tkinterdnd2/) - [github link](https://github.com/Eliav2/tkinterdnd2))
   - I believe Python 3.7+ is needed.
+
+## Original account and save import
+With Goldberg, select **Original Steam account / save import** to remember your Steam folder and account in `config.ini`. Close the game before applying. Target saves are backed up before importing the selected account's Steam `remote` files and setting its per-game account ID. Repeated applications preserve newer progress. If no source saves are found, migration stops. Other game-managed save folders are not moved. Existing emulator selections are preserved when upgrading.
 
 ## Notes about DLCs
 Some DLCs in some games requires you to download additional files.\
